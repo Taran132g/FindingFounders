@@ -584,7 +584,10 @@ def routine_run(user_id: str = Depends(get_current_user_id)):
     """
     raw = _load_raw(user_id)
     order = _canonical(raw.get("routine", {}).get("order", []))
-    seq = [a for a in order if a != "reviewer"] + ["reviewer"]
+    # apply is WEBHOOK / single-run ONLY (its per-agent run button) — never part
+    # of the bulk routine or the scheduler: it opens browser windows that need
+    # the user, so it must not fire unattended. reviewer always runs last.
+    seq = [a for a in order if a not in ("reviewer", "apply")] + ["reviewer"]
     allowed = entitlements.allowed_agents(user_id)
     if "*" not in allowed:
         seq = [a for a in seq if a in allowed]
@@ -695,6 +698,8 @@ async def run_routine(user_id: str = Depends(get_current_user_id)):
     order = _canonical(raw.get("routine", {}).get("order", []))
     plan = []
     for a in order:
+        if a == "apply":            # webhook/single-run only — not shown in the routine plan
+            continue
         missing = [n for n in AGENTS[a]["needs"] if not have.get(n)]
         plan.append({"agent": a, "title": AGENTS[a]["title"], "ready": not missing, "missing": missing})
     cron = raw.get("routine", {}).get("cron", DEFAULT_ROUTINE["cron"])
