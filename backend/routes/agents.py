@@ -93,6 +93,20 @@ AGENTS = {
                             "Post the FULL drafts for review — complete subject + body for each lead, who it "
                             "targets and why you angled it that way, plus the contact email found and its source.",
                  "prefill_query": "this person's name, company/project, outreach voice, and who they reach out to"},
+    "sales": {"title": "Sales", "role": "Lead scout",
+              "needs": [],
+              "fields": [{"key": "territory", "label": "Territory / area", "prefill": True},
+                         {"key": "offer", "label": "What you sell", "prefill": True},
+                         {"key": "ideal_customer", "label": "Ideal customer / who to skip", "prefill": True}],
+              "persona": "You refill the user's cold-call pipeline. Web-search the user's territory for "
+                         "real, owner-operated local businesses that fit their offer, applying their "
+                         "screening filter (skip anyone already running a tool that does the job; "
+                         "prioritize businesses with a VISIBLE leak the offer plugs). Dedupe against the "
+                         "businesses already on the call sheet, then add the new ones as 'to call'. Post a "
+                         "detailed report: each new prospect by name with vertical, phone, best time to reach "
+                         "the owner, which workflow to lead with, and the specific revenue leak (with a rough "
+                         "dollar on it) that makes them a fit. Never invent businesses — only ones you verified.",
+              "prefill_query": "the local-business offer this person sells, the territory they sell in, and the kind of customer they target vs skip"},
     "email": {"title": "Email", "role": "Inbox analyst",
               "needs": ["gmail_address", "gmail_app_password"],
               "fields": [{"key": "priorities", "label": "What to flag / who matters", "prefill": True}],
@@ -146,7 +160,7 @@ DEFAULT_ROUTINE = {"cron": "30 7 * * *", "order": []}
 # The routine ALWAYS runs in this canonical order — briefing → career →
 # linkedin → email → outreach → code (→ apply) → reviewer — regardless of the
 # sequence agents were enabled in. Enabling/disabling only changes membership.
-CANON_ORDER = ["briefing", "career", "linkedin", "email", "outreach", "code", "apply"]
+CANON_ORDER = ["briefing", "career", "linkedin", "email", "outreach", "sales", "code", "apply"]
 
 
 def _canonical(order: list) -> list:
@@ -584,10 +598,8 @@ def routine_run(user_id: str = Depends(get_current_user_id)):
     """
     raw = _load_raw(user_id)
     order = _canonical(raw.get("routine", {}).get("order", []))
-    # apply is WEBHOOK / single-run ONLY (its per-agent run button) — never part
-    # of the bulk routine or the scheduler: it opens browser windows that need
-    # the user, so it must not fire unattended. reviewer always runs last.
-    seq = [a for a in order if a not in ("reviewer", "apply")] + ["reviewer"]
+    # apply rejoined the routine 2026-06-16 (testing the full pipeline). reviewer last.
+    seq = [a for a in order if a != "reviewer"] + ["reviewer"]
     allowed = entitlements.allowed_agents(user_id)
     if "*" not in allowed:
         seq = [a for a in seq if a in allowed]
@@ -668,9 +680,32 @@ def leads(agent: str = "outreach", user_id: str = Depends(get_current_user_id)):
     try:
         r = rq.post(f"{llm.BRIDGE_URL}/leads", json={"agent": agent},
                     headers={"Authorization": "Bearer " + llm.BRIDGE_TOKEN}, timeout=10)
-        return {"items": r.json().get("items", [])} if r.ok else {"items": []}
+        return r.json() if r.ok else {"items": []}
     except Exception:
         return {"items": []}
+
+
+@router.post("/agents/sales/status")
+def sales_status(body: dict = Body(...), user_id: str = Depends(get_current_user_id)):
+    """Update one prospect's status on the owner's vault call sheet (via the Mac bridge)."""
+    if user_id not in BRIDGE_BRAIN_USERS:
+        raise HTTPException(403, "Sales pipeline is owner-only.")
+    business = (body.get("business") or "").strip()
+    status = (body.get("status") or "").strip()
+    if not business or not status:
+        raise HTTPException(400, "business and status required")
+    import requests as rq
+    try:
+        r = rq.post(f"{llm.BRIDGE_URL}/sales-status",
+                    json={"business": business, "status": status},
+                    headers={"Authorization": "Bearer " + llm.BRIDGE_TOKEN}, timeout=10)
+        if not r.ok:
+            raise HTTPException(502, "bridge error")
+        return r.json()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, "Brain/bridge offline — try again when your Mac is awake.")
 
 
 @router.get("/agents/account")
@@ -698,8 +733,6 @@ async def run_routine(user_id: str = Depends(get_current_user_id)):
     order = _canonical(raw.get("routine", {}).get("order", []))
     plan = []
     for a in order:
-        if a == "apply":            # webhook/single-run only — not shown in the routine plan
-            continue
         missing = [n for n in AGENTS[a]["needs"] if not have.get(n)]
         plan.append({"agent": a, "title": AGENTS[a]["title"], "ready": not missing, "missing": missing})
     cron = raw.get("routine", {}).get("cron", DEFAULT_ROUTINE["cron"])
