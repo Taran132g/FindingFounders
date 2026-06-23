@@ -8,7 +8,9 @@ Usage:
     python scripts/scan_local.py /path/to/your/vault          # a folder
     python scripts/scan_local.py /path/to/vault.zip           # or a zip
 
-Requires (in backend/.env): ANTHROPIC_API_KEY, PINECONE_API_KEY, PINECONE_INDEX_NAME.
+Requires (in backend/.env): PINECONE_API_KEY, PINECONE_INDEX_NAME (embeddings +
+vector store), BRIDGE_URL, BRIDGE_TOKEN (brain-card synthesis runs on the local
+Claude subscription via pais_bridge `claude -p` — no Anthropic API key, no credits).
 Your notes are embedded into a throwaway namespace that is deleted when the scan
 finishes — nothing of yours is left in the index.
 """
